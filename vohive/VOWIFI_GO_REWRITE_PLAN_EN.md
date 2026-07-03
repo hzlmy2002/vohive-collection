@@ -79,6 +79,124 @@ Design principles:
 5. Public Go API compatibility must be restored before full protocol support.
 6. Sensitive material must never be logged or serialized: IMSI, RAND, AUTN, RES, CK, IK, AUTS, K_aut, MSK, IKE keys, ESP keys.
 
+### 2.1 How to Use `../swu-go`
+
+`../swu-go` is the most useful Go reference currently available. It should be treated as the fastest path to restoring the SWu/ePDG tunnel, ahead of rewriting EAP-AKA, IKEv2, ESP, and TUN from scratch. It already contains the hard VoWiFi tunnel pieces: IKEv2, EAP-AKA/AKA', Child SA, ESP, TUN/XFRM dataplanes, rekey, DPD, NAT-T, MOBIKE, IKE fragmentation, and session snapshots.
+
+The first recovery version should wrap `github.com/iniwex5/swu-go` from the recreated `vowifi-go` module. Do not start by reimplementing `internal/eapaka`, `internal/ike`, and `internal/ipsec`. Those directories may remain as future fallback or migration points.
+
+Recommended development dependency:
+
+```go
+require github.com/iniwex5/swu-go v0.0.0
+
+replace github.com/iniwex5/swu-go => ../swu-go
+```
+
+Alternatively, add `../swu-go` to the workspace. A local `replace` inside `/opt/vohive-collection/vowifi-go/go.mod` is more self-contained and is the better first step.
+
+Useful `swu-go` packages:
+
+| `swu-go` package | Usage | First version handling |
+| --- | --- | --- |
+| `pkg/swu` | Main SWu session API: `Config`, `NewSession`, `Connect`, `Snapshot`, `Shutdown` | Wrap directly |
+| `pkg/sim` | `SIMProvider` interface: `GetIMSI`, `CalculateAKA`, `Close` | Implement an adapter |
+| `pkg/eap` | EAP-AKA/AKA' attributes, AUTS, fast reauth | Used internally by `pkg/swu` |
+| `pkg/ikev2` | IKEv2 payloads, notify handling, CP/P-CSCF parsing | Used internally; useful for debugging |
+| `pkg/ipsec` | ESP, UDP sockets, SOCKS5 UDP transport | Used internally |
+| `pkg/driver` | TUN, XFRM, netlink routing | Used internally |
+| `pkg/crypto` | DH, PRF, Milenage, integrity and encryption | Do not rewrite first |
+
+Do not use `swu-go/pkg/sim/pcsc.go` in the first recovery path. That file is only a PC/SC skeleton and its IMSI/AKA methods return not implemented. The current goal is to make the original VoHive code run again, so SIM/AKA should continue to come from VoHive's existing modem, APDU, and QMI path:
+
+```text
+VoHive device.BuildAKAProvider(...)
+  -> vowifi-go runtimehost.SIMAdapter
+  -> swu-go pkg/sim.SIMProvider adapter
+  -> swu-go EAP-AKA/IKE_AUTH
+```
+
+Core adapter:
+
+```go
+type swuSIMAdapter struct {
+    imsi string
+    sim  runtimehost.SIMAdapter
+}
+
+func (a *swuSIMAdapter) GetIMSI() (string, error) {
+    if strings.TrimSpace(a.imsi) != "" {
+        return a.imsi, nil
+    }
+    return "", errors.New("imsi unavailable")
+}
+
+func (a *swuSIMAdapter) CalculateAKA(rand, autn []byte) (res, ck, ik, auts []byte, err error) {
+    r, err := a.sim.CalculateAKA(rand, autn)
+    if err != nil {
+        return nil, nil, nil, r.AUTS, err
+    }
+    return r.RES, r.CK, r.IK, r.AUTS, nil
+}
+
+func (a *swuSIMAdapter) Close() error { return nil }
+```
+
+`runtimehost.StartRequest` to `swu.Config` mapping:
+
+| `runtimehost` source | `swu.Config` field |
+| --- | --- |
+| `DeviceID` | `DeviceID` |
+| prepared ePDG host or carrier profile | `EpDGAddr` |
+| carrier ePDG port | `EpDGPort` |
+| carrier APN, default `ims` | `APN` |
+| prepared MCC/MNC | `MCC` / `MNC` |
+| `SIMAdapter` | `SIM`, wrapped by `swuSIMAdapter` |
+| `Dataplane.Mode == "userspace"` | `DataplaneMode="tun"` |
+| future kernel offload | `DataplaneMode="xfrmi"` |
+| generated tunnel interface name | `TUNName` |
+| carrier IKE proposals | `IKEProposals` |
+| carrier ESP proposals | `ESPProposals` |
+| NAT keepalive policy | `NATKeepaliveSeconds` |
+| DPD policy | `DPDIntervalSeconds` |
+| VoHive proxy config | `Socks5Addr/Socks5Username/Socks5Password`, if available |
+
+`swu.Session.Snapshot()` to `runtimehost` mapping:
+
+| `swu.SessionSnapshot` | `runtimehost` |
+| --- | --- |
+| `Established` | `TunnelReady` / `AccessReady` |
+| `TUNName` | `State.TUNName` or dataplane diagnostics |
+| `IPv4` / `IPv6` | tunnel assigned address |
+| `DNSv4` / `DNSv6` | DNS diagnostics |
+| `PCSCFv4` / `PCSCFv6` | IMS P-CSCF candidates |
+| `IKEProfile` / `IKEEncr` / `IKEInteg` / `IKEPRF` / `IKEDH` | negotiated algorithm diagnostics |
+| `LastError` | `LastError`, usually `LastErrorClass="ike"` or `"dataplane"` |
+
+The first recovery startup path should be:
+
+```text
+runtimehost.Start
+  -> carrier/identity PrepareStart
+  -> build swu.Config
+  -> swu.NewSession
+  -> goroutine session.Connect(ctx)
+  -> wait until Snapshot.Established or error
+  -> collect assigned IP/DNS/P-CSCF
+  -> IMS REGISTER
+  -> SMS over IMS
+```
+
+`swu-go` does not cover these pieces, which must remain in `vowifi-go`:
+
+- `runtimehost` public API compatibility.
+- Carrier profiles and overrides.
+- Identity preparation and ISIM fallback.
+- IMS SIP REGISTER.
+- SMS over IMS.
+- USSD, E911, and voicehost compatibility.
+- VoHive observer, event, and messaging integration.
+
 ## 3. Recommended Module Layout
 
 Create this module:
@@ -123,6 +241,11 @@ vowifi-go/
       gateway.go
       sdp.go
   internal/
+    swuadapter/
+      config.go
+      session.go
+      sim.go
+      snapshot.go
     epdg/
       resolve.go
       plan.go
@@ -817,9 +940,9 @@ m=audio 4000 RTP/AVP 0 8
 6. Run `req.BeforeStart(ctx, SessionConfig{DataplaneMode: req.Dataplane.Mode})`.
 7. Check `req.ShouldRun()`.
 8. Run SIM and access gate.
-9. Resolve ePDG.
-10. Establish IKEv2/EAP-AKA.
-11. Establish Child SA, ESP, and TUN.
+9. Build `swu.Config`.
+10. Use `swu-go` to establish ePDG/IKEv2/EAP-AKA/Child SA/ESP/TUN.
+11. Extract tunnel address, DNS, P-CSCF, and negotiated algorithms from `swu.Session.Snapshot()`.
 12. Register IMS.
 13. Bind SMS capability.
 14. Return `Instance`.
@@ -850,6 +973,29 @@ Error mapping:
 | IMS | `ims` | `ims_register_failed` |
 | SMS | `sms` | `sms_binding_failed` |
 | proxy | `proxy` | returned by VoHive `BeforeStart` |
+
+The first recovery version should not call a new in-house `internal/ike` stack. It should go through `internal/swuadapter`:
+
+```go
+session, err := swuadapter.Start(ctx, swuadapter.StartInput{
+    DeviceID:  req.DeviceID,
+    Carrier:   prepared.EffectiveCarrier,
+    Identity:  prepared.IMSIdentity,
+    SIM:       req.SIM,
+    Dataplane: req.Dataplane,
+    Proxy:     req.Proxy,
+    Logger:    logger,
+})
+```
+
+`swuadapter.Start` should:
+
+1. Convert carrier, identity, and dataplane configuration into `swu.Config`.
+2. Wrap `runtimehost.SIMAdapter` as `swusim.SIMProvider`.
+3. Call `swu.NewSession(cfg, zapLogger)`.
+4. Run `session.Connect(ctx)`.
+5. Poll or observe `session.Snapshot()` until `Established=true`.
+6. Return tunnel diagnostics: P-CSCF, assigned IP, TUN name, DNS, and negotiated algorithms.
 
 ### 5.2 Carrier Profiles
 
@@ -904,6 +1050,10 @@ ims.mnc{MNC3}.mcc{MCC}.3gppnetwork.org
 
 ### 5.4 AKA and EAP-AKA
 
+The first recovery version should not reimplement EAP-AKA. EAP-AKA/AKA' challenge handling, AT_MAC, AUTS, and fast reauth should be delegated to `swu-go/pkg/swu`, which uses `swu-go/pkg/eap` internally. The `vowifi-go` layer only needs to ensure `SIMAdapter.CalculateAKA` is bridged correctly into `swu-go/pkg/sim.SIMProvider.CalculateAKA`.
+
+The requirements below are retained as a fallback or maintenance target if `swu-go` is later vendored or replaced.
+
 The runtime receives AKA through VoHive:
 
 ```go
@@ -939,12 +1089,15 @@ Security:
 
 ### 5.5 ePDG Resolution and Transport
 
+In the first recovery version, ePDG DNS, UDP 500/4500, NAT-T, and SOCKS5 UDP transport should be delegated to `swu-go/pkg/swu` and `swu-go/pkg/ipsec`. `vowifi-go/internal/epdg` should initially hold profile resolution, diagnostics, and future fallback hooks only.
+
 ePDG stage:
 
 1. Take host from `PreparedSession.EPDGAddr`.
 2. If `ProxyConfig.Enabled`:
-   - First version may return `proxy_not_implemented`.
-   - Later version should implement SOCKS5 UDP ASSOCIATE.
+   - Prefer mapping to `swu.Config.Socks5Addr/Socks5Username/Socks5Password`.
+   - If VoHive proxy configuration lacks fields required by `swu-go`, return a clear `proxy_not_supported_by_swu_adapter` error.
+   - Do not silently fall back to direct ePDG when the user enabled a proxy.
 3. DNS:
    - Try system resolver.
    - Fall back to nameservers from `/etc/resolv.conf` or public DNS.
@@ -961,7 +1114,9 @@ Failure states:
 
 ### 5.6 IKEv2 State Machine
 
-Implement the minimal standard VoWiFi path:
+Do not implement this from scratch in the first recovery pass. `swu-go/pkg/swu` already implements IKE_SA_INIT, IKE_AUTH, CREATE_CHILD_SA, INFORMATIONAL, COOKIE, fragmentation, rekey, DPD, MOBIKE, and NAT-T. `vowifi-go/internal/ike` should stay out of the primary path until there is a reason to replace `swu-go`.
+
+If an in-house IKEv2 stack is later needed, the minimal standard VoWiFi path is:
 
 ```text
 IKE_SA_INIT:
@@ -995,6 +1150,28 @@ ESP: aes128-sha1
 Expand this later by carrier profile.
 
 ### 5.7 Child SA, ESP, and TUN
+
+Do not implement ESP/TUN from scratch in the first recovery pass. `swu-go` already supports userspace TUN and XFRMI. `vowifi-go` should map config and collect state.
+
+Userspace dataplane:
+
+```go
+swu.Config{
+    EnableDriver: true,
+    DataplaneMode: "tun",
+}
+```
+
+Optional kernel XFRM path:
+
+```go
+swu.Config{
+    EnableDriver: true,
+    DataplaneMode: "xfrmi",
+}
+```
+
+The flow below is retained as a future fallback design:
 
 Userspace dataplane flow:
 
@@ -1146,7 +1323,7 @@ GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./internal/vowifihost 
 
 Note: full `go test ./...` also requires generated `internal/web/dist`.
 
-### Milestone B: Dry-run Runtime
+### Milestone B: Dry-run Runtime plus `swu-go` Adapter Shell
 
 Deliverables:
 
@@ -1154,50 +1331,49 @@ Deliverables:
 - State progresses from SIM-ready to SMS-ready without touching network.
 - `Obs()` exposes stage diagnostics.
 - `SendSMSWithOptions` returns a clear dry-run or not-connected outcome.
+- Add `internal/swuadapter`, initially with a fake session.
+- Implement `runtimehost.SIMAdapter -> swu-go/pkg/sim.SIMProvider`.
+- Unit test carrier, identity, and dataplane mapping into `swu.Config`.
 
 Purpose:
 
 - Web/API does not crash.
 - VoHive lifecycle, state stream, restart, and eSIM switch recovery can be tested.
 
-### Milestone C: Real SIM AKA
+### Milestone C: Real SWu Tunnel via `swu-go`
 
 Deliverables:
 
-- EAP-AKA parser and response builder.
-- `SIMAdapter.CalculateAKA` integrated.
-- AUTS sync failure support.
-- ISIM/USIM preference respected.
+- `vowifi-go` depends on `github.com/iniwex5/swu-go`.
+- `swuadapter.Start` calls `swu.NewSession` and `session.Connect(ctx)`.
+- `SIMAdapter.CalculateAKA` is used by `swu-go` during EAP-AKA/IKE_AUTH.
+- ePDG DNS/UDP, IKE_SA_INIT, IKE_AUTH, Child SA, ESP, and TUN are handled by `swu-go`.
+- `session.Snapshot()` maps into `runtimehost.State` and `Obs()`.
+- `Stop` calls `session.Shutdown()` and waits for goroutine exit.
 
 Validation:
 
-- Unit vectors for EAP-AKA.
-- Real SIM challenge through at least one backend path.
-
-### Milestone D: Real ePDG and IKE
-
-Deliverables:
-
-- ePDG DNS and UDP path.
-- IKE_SA_INIT.
-- IKE_AUTH with EAP-AKA.
-- Child SA key derivation.
-
-Validation:
-
-- Reach EAP success and Child SA establishment.
+- A real VoHive modem/APDU backend can complete one `SIM.CalculateAKA` call or return a clear error.
+- ePDG connection reaches `swu.SessionSnapshot.Established=true`.
 - `TunnelReady=true`.
+- P-CSCF, DNS, assigned IP, and negotiated algorithms appear in diagnostics.
 
-### Milestone E: ESP/TUN and IMS
+### Milestone D: IMS REGISTER
 
 Deliverables:
 
-- Userspace ESP.
-- TUN gateway.
+- Create SIP transport over the `swu-go` tunnel using P-CSCF.
 - IMS REGISTER 200 OK.
+- REGISTER refresh.
 - `IMSReady=true`.
 
-### Milestone F: SMS
+Validation:
+
+- P-CSCF is reachable through the `swu-go` TUN/XFRM path.
+- 401/407 Digest AKA flow completes.
+- `Instance.State().IMSReady == true`.
+
+### Milestone E: SMS over IMS
 
 Deliverables:
 
@@ -1205,6 +1381,15 @@ Deliverables:
 - Delivery store integration.
 - Inbound SMS dispatch.
 - `SMSReady=true`.
+
+### Milestone F: Edge Features
+
+Deliverables:
+
+- USSD over IMS returns a clear unsupported error or a real result.
+- E911 websheet provider.
+- voicehost SDP and state compatibility.
+- Decide whether `swu-go` should remain a dependency or be vendored into `vowifi-go`.
 
 ## 7. Testing Strategy
 
@@ -1215,10 +1400,11 @@ Required:
 - `identity.NormalizeProfile`
 - Standard ePDG/IMS domain generation.
 - Carrier profile matching.
-- EAP-AKA parse/build.
-- AKA sync failure and AUTS.
-- IKE payload encode/decode.
-- Proposal parser.
+- `runtimehost.SIMAdapter -> swu-go SIMProvider` adapter.
+- `runtimehost/carrier -> swu.Config` mapping.
+- `swu.SessionSnapshot -> runtimehost.State/Obs` mapping.
+- `swuadapter.Start` fake-session success, failure, and cancellation paths.
+- Proposal parser into `swu.Config.IKEProposals/ESPProposals`.
 - SIP REGISTER builder/parser.
 - SDP parser.
 - `Instance{}` zero-value safety.
@@ -1235,9 +1421,9 @@ Use build tags:
 
 Live tests:
 
-- Real SIM AKA.
-- ePDG DNS and UDP reachability.
-- IKE SA establishment.
+- AKA through VoHive's existing modem/APDU backend.
+- `swu-go` ePDG DNS and UDP reachability.
+- `swu-go` IKE/ESP tunnel establishment.
 - IMS REGISTER.
 - SMS send.
 
@@ -1260,7 +1446,7 @@ Use carrier profiles and register variants. Do not hard-code carrier behavior in
 
 ### APDU and AKA Concurrency
 
-VoHive already owns APDU arbitration. The runtime should avoid long-lived logical-channel ownership. Each challenge should use a short lease, short timeout, and immediate cleanup.
+VoHive already owns APDU arbitration. The runtime should avoid long-lived logical-channel ownership. When `swu-go` triggers `CalculateAKA` through the adapter, each challenge should use a short lease, short timeout, and immediate cleanup.
 
 ### eSIM Switch Recovery
 
@@ -1272,13 +1458,18 @@ VoHive already owns APDU arbitration. The runtime should avoid long-lived logica
 
 ### Upstream Proxy
 
-VoHive already checks SOCKS5 UDP ASSOCIATE in `BeforeStart`. The first runtime version may reject enabled proxy with `proxy_not_implemented`; later versions should implement SOCKS5 UDP relay.
+VoHive already checks SOCKS5 UDP ASSOCIATE in `BeforeStart`. `swu-go` already has SOCKS5 UDP transport fields, so the first version should try to map `Socks5Addr`, `Socks5Username`, and `Socks5Password`. If the VoHive proxy model cannot map cleanly, return a clear `proxy_not_supported_by_swu_adapter` error instead of silently falling back to direct ePDG.
+
+### `swu-go` API Drift
+
+Keep `swu-go` behind a thin adapter. Do not expose `swu-go` types through `runtimehost`. If the dependency changes too often, vendor the pinned implementation into `vowifi-go/internal/swuimpl`.
 
 ## 9. First Week Task Plan
 
 ### Day 1
 
 - Create `/opt/vohive-collection/vowifi-go/go.mod`.
+- Add `github.com/iniwex5/swu-go` dependency and local `replace`.
 - Create all public packages.
 - Add compatibility types.
 - Add zero-safe `Instance`.
@@ -1297,22 +1488,23 @@ VoHive already checks SOCKS5 UDP ASSOCIATE in `BeforeStart`. The first runtime v
 - Implement `Instance` state machine.
 - Implement observers.
 - Implement dry-run `Start`.
+- Add `internal/swuadapter` interfaces and fake session.
 - Implement `messaging` and `eventhost`.
 - Make Web/API runtime DTOs show state.
 
 ### Day 4 and Day 5
 
-- Implement EAP-AKA packet parser and builder.
-- Connect `SIMAdapter.CalculateAKA`.
-- Add AUTS handling.
-- Add test vectors.
+- Implement `runtimehost.SIMAdapter -> swu-go/pkg/sim.SIMProvider`.
+- Implement `StartRequest/Profile -> swu.Config`.
+- Implement `swu.SessionSnapshot -> State/Obs`.
+- Validate Start/Stop/goroutine cleanup with fake transport/session.
 
 ### Day 6 and Day 7
 
-- Implement IKE codec and state skeleton.
-- Implement IKE_SA_INIT encode/decode.
-- Implement proposal negotiation.
-- Implement ePDG DNS and UDP transport plan.
+- Use `swu-go` to establish a real ePDG/IKE/ESP tunnel.
+- Connect a real VoHive AKA provider.
+- Feed P-CSCF, DNS, and assigned IP into the IMS stage.
+- Start the minimal IMS REGISTER implementation.
 
 ## 10. Suggested Commit Sequence
 
@@ -1329,16 +1521,17 @@ vohive: document vowifi-go rewrite plan
 Second batch:
 
 ```text
-vowifi-go: implement EAP-AKA parser and response builder
-vowifi-go: connect SIMAdapter AKA into runtime auth stage
-vowifi-go: add ePDG resolver and UDP transport plan
+vowifi-go: add swu-go dependency and adapter boundary
+vowifi-go: map carrier and identity data into swu config
+vowifi-go: bridge SIMAdapter into swu SIMProvider
+vowifi-go: map swu session snapshots into runtime state
 ```
 
 Third batch:
 
 ```text
-vowifi-go: implement IKE_SA_INIT and IKE_AUTH state machine
-vowifi-go: implement userspace ESP and TUN gateway
+vowifi-go: start swu sessions from runtimehost
+vowifi-go: wire swu tunnel lifecycle into stop and reconnect
 vowifi-go: implement IMS REGISTER and SMS over IMS
 ```
 
@@ -1355,7 +1548,7 @@ Minimum recovery:
 Functional recovery:
 
 - At least one backend path can perform SIM AKA.
-- ePDG IKE/ESP tunnel can be established.
+- ePDG IKE/ESP tunnel can be established through `swu-go`.
 - IMS REGISTER succeeds.
 - SMS over IMS can send and receive.
 - E911 websheet works for supported carriers.
@@ -1368,4 +1561,3 @@ Full recovery:
 - Inbound SMS delivery reports.
 - Voice gateway/agent.
 - Automatic reconnect, keepalive, DPD, rekey, and re-register.
-
