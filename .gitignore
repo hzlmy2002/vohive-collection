@@ -1,0 +1,38 @@
+# macOS metadata
+.DS_Store
+**/.DS_Store
+**/._*
+
+# Workspace-local caches
+.cache/
+.gocache/
+.gomodcache/
+.gopath/
+.npm-cache/
+
+# Go build/test artifacts
+bin/
+*.test
+*.out
+coverage.out
+*.coverprofile
+*.prof
+
+# Node/frontend generated artifacts
+node_modules/
+**/node_modules/
+vohive/web/dist/
+vohive/internal/web/dist/
+
+# VoHive local build/release artifacts
+vohive/dist/
+vohive-release/*_linux_*
+vohive_v*_linux_*
+
+# Reverse-engineering local databases
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til

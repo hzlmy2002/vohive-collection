@@ -1,0 +1,11 @@
+mcc: "310"
+mnc: "260"
+id: T-Mobile_260
+esp_proposals:
+  - aes128-sha256
+  - aes128-sha1
+e911:
+  enabled: true
+  provider: T-Mobile_entitlement
+  entitlement_url: https://eas3.msg.t-mobile.com/
+  websheet_host_policy: public_https

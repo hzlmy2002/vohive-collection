@@ -1,0 +1,12 @@
+mcc: "530"
+mnc: "24"
+id: 2degrees_nz_53024
+custom_epdg: epdg.ims.2degrees.net.nz
+ip_stack: ipv4
+dpd_interval_seconds: 300
+ike_proposals:
+  - aes256-sha512-prfsha512-modp1024
+esp_proposals:
+  - aes256-sha512
+ims_register_template:
+  id: 2degrees_nz_53024_ios

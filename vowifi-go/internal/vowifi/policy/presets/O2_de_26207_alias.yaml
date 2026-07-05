@@ -1,0 +1,16 @@
+mcc: "262"
+mnc: "07"
+id: O2_de_26207_alias
+custom_epdg: epdg.epc.mnc007.mcc262.pub.3gppnetwork.org
+nat_keepalive_seconds: 20
+dpd_interval_seconds: 600
+device_model: iphone15,4
+ike_proposals:
+  - aes256-sha256-prfsha1-modp2048
+esp_proposals:
+  - aes256-sha256
+ims_register_template:
+  id: O2_de_26203
+  include_pani_authenticated: true
+  strict_security_server_offer: true
+  enable_initial_reject_fallback: true

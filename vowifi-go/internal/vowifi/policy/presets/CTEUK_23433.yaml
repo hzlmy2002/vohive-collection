@@ -1,0 +1,9 @@
+mcc: "234"
+mnc: "33"
+id: CTEUK_23433
+device_model: rmx3366
+ims_register_template:
+  id: CTEUK_23433
+  enable_initial_reject_fallback: false
+  include_pani_authenticated: true
+  use_plain_digest_placeholder: false

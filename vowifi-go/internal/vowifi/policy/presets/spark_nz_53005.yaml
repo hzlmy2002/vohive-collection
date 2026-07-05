@@ -1,0 +1,14 @@
+mcc: "530"
+mnc: "05"
+id: spark_nz_53005
+custom_epdg: epdg.epc.mnc005.mcc530.pub.3gppnetwork.spark.co.nz
+device_model: iphone15,4
+dpd_interval_seconds: 600
+ike_proposals:
+  - aes256-sha256-prfsha256-modp2048
+esp_proposals:
+  - aes256-sha256
+ims_domain: ims.mnc005.mcc530.3gppnetwork.org
+ims_realm: ims.mnc005.mcc530.3gppnetwork.org
+ims_register_template:
+  id: spark_nz_53005_ios

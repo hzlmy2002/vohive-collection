@@ -1,0 +1,27 @@
+mcc: "234"
+mnc: "020"
+id: three_uk_234020
+dpd_interval_seconds: 600
+device_model: rmx3366
+ike_proposals:
+  - aes256-sha256-modp2048
+esp_proposals:
+  - aes128-sha256
+ims_register_template:
+  id: three_uk_234020
+  allow_header: INVITE,BYE,CANCEL,ACK,NOTIFY,UPDATE,PRACK,INFO,MESSAGE,OPTIONS
+  icsi_ref: urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel
+  security_client_mechanisms:
+    - alg: hmac-sha-1-96
+      ealg: "null"
+      prot: esp
+      mode: trans
+  contact_param_order:
+    - access_type
+    - audio
+    - smsip
+    - icsi_ref
+    - sip_instance
+  include_pani_authenticated: true
+  strict_security_server_offer: true
+  enable_initial_reject_fallback: false

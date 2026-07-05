@@ -1,0 +1,13 @@
+mcc: "454"
+mnc: "000"
+id: csl_454000
+ip_stack: ipv4
+aka_challenge_mode: omit
+ike_proposals:
+  - aes256-sha256-modp2048
+esp_proposals:
+  - aes256-sha256
+  - aes128-sha256
+ims_register_template:
+  id: csl_454000
+  sec_agree_mode: auto

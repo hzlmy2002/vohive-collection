@@ -1,0 +1,10 @@
+mcc: "228"
+mnc: "002"
+id: sunrise_22802
+aka_challenge_mode: checkcode
+device_identity_enabled: false
+ip_stack: ipv4
+ike_proposals:
+  - aes128-sha256-modp2048
+esp_proposals:
+  - aes128-sha256

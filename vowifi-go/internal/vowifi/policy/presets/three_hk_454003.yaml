@@ -1,0 +1,14 @@
+mcc: "454"
+mnc: "003"
+id: three_hk_454003
+custom_epdg: wlan.three.com.hk
+ip_stack: ipv4
+aka_challenge_mode: checkcode
+ike_proposals:
+  - aes256-sha256-modp2048
+esp_proposals:
+  - aes256-sha256
+  - aes128-sha256
+ims_register_template:
+  id: three_hk_454003
+  sec_agree_mode: auto

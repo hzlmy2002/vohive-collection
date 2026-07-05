@@ -1,0 +1,16 @@
+mcc: "204"
+mnc: "04"
+id: vodafone_nl_20404
+custom_epdg: epdg.epc.mnc004.mcc204.pub.3gppnetwork.org
+apn: ims
+dpd_interval_seconds: 600
+ike_proposals:
+  - aes256-sha256-prfsha512-modp2048
+esp_proposals:
+  - aes256-sha256
+ims_register_template:
+  id: vodafone_nl_20404_ios
+  enable_initial_reject_fallback: false
+  include_pani_authenticated: true
+  strict_security_server_offer: true
+  use_plain_digest_placeholder: false

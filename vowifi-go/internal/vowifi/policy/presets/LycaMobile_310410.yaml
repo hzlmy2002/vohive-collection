@@ -1,0 +1,33 @@
+mcc: "310"
+mnc: "410"
+id: LycaMobile_310410
+e911:
+  enabled: true
+  provider: att_entitlement
+  entitlement_url: https://sentitlement2.mobile.att.net/
+  websheet_host_policy: public_https
+custom_epdg: epdg.epc.att.net
+apn: ims
+dpd_interval_seconds: 600
+ims_identity_source: isim
+ike_proposals:
+  - aes128-sha256-modp2048
+esp_proposals:
+  - aes128-sha256
+ims_register_template:
+  id: att_310280
+  supported_header: path,sec-agree,gruu
+  include_pani_authenticated: true
+  strict_security_server_offer: true
+  enable_initial_reject_fallback: true
+  security_client_mechanisms:
+    - alg: hmac-sha-1-96
+      ealg: aes-cbc
+      prot: esp
+      mode: trans
+  register_policy:
+    id: att_main
+    temporary_status_codes: [403, 480, 500, 503, 504]
+    forbidden_status_codes: []
+    initial_reject_fallback_status_codes: [400, 403, 480, 500]
+    temporary_retry_seconds: 0
